@@ -90,31 +90,42 @@ impl BatchProcessor {
 
                 let mut success_count = 0;
                 let mut error_count = 0;
+                let mut skipped_count = 0;
 
                 info!("Starting transaction for satker {} with {} records", 
                       kd_satker, response.data.len());
 
                 for (idx, data) in response.data.iter().enumerate() {
-                    if let Some(rekening) = data.to_rekening() {
-                        info!("Processing record {}/{} for satker {}: {}", 
-                              idx + 1, response.data.len(), kd_satker, rekening.no_rekening);
-                        
-                        match self.db_handler.insert_rekening_batch(&conn, &rekening) {
-                            Ok(_) => {
-                                info!("Successfully inserted record {}/{}: {}", 
-                                      idx + 1, response.data.len(), rekening.no_rekening);
-                                success_count += 1;
-                            },
-                            Err(e) => {
-                                error!("Failed to insert record {}/{} - {}: {:?}", 
-                                       idx + 1, response.data.len(), rekening.no_rekening, e);
-                                error_count += 1;
-                                let _ = DatabaseHandler::rollback_transaction(&conn);
-                                return Ok((false, 0));
+                    match data.to_rekening() {
+                        Some(rekening) => {
+                            info!("Processing record {}/{} for satker {}: {}", 
+                                  idx + 1, response.data.len(), kd_satker, rekening.no_rekening);
+                            
+                            match self.db_handler.insert_rekening_batch(&conn, &rekening) {
+                                Ok(_) => {
+                                    info!("Successfully inserted record {}/{}: {}", 
+                                          idx + 1, response.data.len(), rekening.no_rekening);
+                                    success_count += 1;
+                                },
+                                Err(e) => {
+                                    error!("Failed to insert record {}/{} - {}: {:?}", 
+                                           idx + 1, response.data.len(), rekening.no_rekening, e);
+                                    error_count += 1;
+                                    let _ = DatabaseHandler::rollback_transaction(&conn);
+                                    return Ok((false, 0));
+                                }
                             }
+                        },
+                        None => {
+                            skipped_count += 1;
+                            info!("Skipping record {}/{} for satker {} due to invalid/missing NOREK", 
+                                  idx + 1, response.data.len(), kd_satker);
                         }
                     }
                 }
+
+                info!("Processing summary for satker {} - Success: {}, Errors: {}, Skipped: {}", 
+                      kd_satker, success_count, error_count, skipped_count);
 
                 if error_count == 0 && success_count > 0 {
                     match DatabaseHandler::commit_transaction(&conn) {

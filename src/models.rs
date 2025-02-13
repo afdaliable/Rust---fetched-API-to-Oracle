@@ -34,6 +34,15 @@ impl RekeningData {
         // Add validation logging
         info!("Converting RekeningData to Rekening: {:?}", self);
         
+        // First validate NOREK since it's the most important field
+        let no_rekening = match &self.norek {
+            Some(norek) if !norek.trim().is_empty() => norek.clone(),
+            _ => {
+                error!("Missing or empty NOREK");
+                return None;
+            }
+        };
+
         let tgl_izin = match self.tglizin.as_ref().and_then(|date_str| {
             NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
                 .ok()
@@ -51,10 +60,6 @@ impl RekeningData {
             error!("Missing kdsatker");
             return None;
         }
-        if self.norek.is_none() {
-            error!("Missing norek");
-            return None;
-        }
 
         Some(Rekening {
             kdjenis: self.kdjenis.clone().unwrap_or_default(),
@@ -62,7 +67,7 @@ impl RekeningData {
             nama_bank: self.nmbank.clone().unwrap_or_default(),
             nama_rekening: self.nmrek.clone().unwrap_or_default(),
             no_izin: self.noizin.clone().unwrap_or_default(),
-            no_rekening: self.norek.clone()?,
+            no_rekening,
             tgl_izin,
             desc_status_rekening: self.nmstatus.clone().unwrap_or_default(),
         })
