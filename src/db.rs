@@ -154,4 +154,99 @@ impl DatabaseHandler {
         let count: i64 = row.get(0)?;
         Ok(count > 0)
     }
+
+    pub fn begin_transaction(&self) -> Result<r2d2::PooledConnection<OracleConnectionManager>> {
+        let conn = self.pool.get()?;
+        conn.execute("SET TRANSACTION READ WRITE", &[])?;
+        info!("Transaction started successfully");
+        Ok(conn)
+    }
+
+    pub fn commit_transaction(conn: &r2d2::PooledConnection<OracleConnectionManager>) -> Result<()> {
+        conn.execute("COMMIT", &[])?;
+        info!("Transaction committed successfully");
+        Ok(())
+    }
+
+    pub fn rollback_transaction(conn: &r2d2::PooledConnection<OracleConnectionManager>) -> Result<()> {
+        conn.execute("ROLLBACK", &[])?;
+        info!("Transaction rolled back");
+        Ok(())
+    }
+
+    pub fn insert_rekening_batch(&self, conn: &r2d2::PooledConnection<OracleConnectionManager>, rekening: &Rekening) -> Result<()> {
+        info!("Inserting rekening in batch: {}", rekening.no_rekening);
+        
+        match conn.execute(
+            "MERGE INTO V_BEN_REKONREK_SPRINT target
+            USING (
+                SELECT 
+                    :1 as KODE,
+                    :2 as KODE_SATKER,
+                    :3 as NAMA_BANK,
+                    :4 as NAMA_REK,
+                    :5 as NO_IZIN,
+                    :6 as NOREK,
+                    TO_DATE(:7, 'YYYY-MM-DD') as TGL_IZIN,
+                    :8 as OWNER,
+                    :9 as KODE_UNIT_TEKNIS,
+                    :10 as DESC_STATUS_REKENING,
+                    :11 as STATUS_REKENING,
+                    :12 as MATA_UANG
+                FROM dual
+            ) source
+            ON (target.NOREK = source.NOREK)
+            WHEN MATCHED THEN
+                UPDATE SET
+                    NAMA_BANK = source.NAMA_BANK,
+                    NAMA_REK = source.NAMA_REK,
+                    NO_IZIN = source.NO_IZIN,
+                    TGL_IZIN = source.TGL_IZIN,
+                    OWNER = source.OWNER,
+                    KODE_UNIT_TEKNIS = source.KODE_UNIT_TEKNIS,
+                    DESC_STATUS_REKENING = source.DESC_STATUS_REKENING,
+                    STATUS_REKENING = source.STATUS_REKENING,
+                    MATA_UANG = source.MATA_UANG,
+                    MODIFIED_BY = 'SYSTEM',
+                    MODIFIED_DATE = CURRENT_TIMESTAMP,
+                    VERSION = VERSION + 1
+            WHEN NOT MATCHED THEN
+                INSERT (
+                    KODE, KODE_SATKER, NAMA_BANK, NAMA_REK,
+                    NO_IZIN, NOREK, TGL_IZIN, OWNER,
+                    KODE_UNIT_TEKNIS, DESC_STATUS_REKENING,
+                    STATUS_REKENING, MATA_UANG,
+                    CREATED_BY, CREATED_DATE, VERSION, DELETED
+                ) VALUES (
+                    source.KODE, source.KODE_SATKER, source.NAMA_BANK,
+                    source.NAMA_REK, source.NO_IZIN, source.NOREK,
+                    source.TGL_IZIN, source.OWNER, source.KODE_UNIT_TEKNIS,
+                    source.DESC_STATUS_REKENING, source.STATUS_REKENING,
+                    source.MATA_UANG, 'SYSTEM', CURRENT_TIMESTAMP, 1, 0
+                )",
+            &[
+                &rekening.kdjenis,           // KODE
+                &rekening.kd_satker,         // KODE_SATKER
+                &rekening.nama_bank,         // NAMA_BANK
+                &rekening.nama_rekening,     // NAMA_REK
+                &rekening.no_izin,          // NO_IZIN
+                &rekening.no_rekening,      // NOREK
+                &rekening.tgl_izin,         // TGL_IZIN
+                &"1",                       // OWNER
+                &"",                        // KODE_UNIT_TEKNIS
+                &rekening.desc_status_rekening, // DESC_STATUS_REKENING
+                &0,                         // STATUS_REKENING (default to 0)
+                &"IDR",                     // MATA_UANG
+            ],
+        ) {
+            Ok(rows) => {
+                info!("Affected rows for {}: {:?}", rekening.no_rekening, rows);
+                Ok(())
+            }
+            Err(e) => {
+                error!("Error during batch insert for {}: {:?}", rekening.no_rekening, e);
+                Err(e.into())
+            }
+        }
+    }
 } 
