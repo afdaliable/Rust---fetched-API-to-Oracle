@@ -1,0 +1,6 @@
+/target
+.env
+.cursorrules
+response-api.json
+tabel.sql
+setuplinux.md
