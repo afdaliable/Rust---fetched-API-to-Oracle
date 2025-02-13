@@ -1,6 +1,6 @@
 use crate::models::Rekening;
 use anyhow::Result;
-use log::{info, error};
+use log::{info, error, warn};
 use r2d2_oracle::OracleConnectionManager;
 use r2d2::Pool;
 
@@ -133,24 +133,20 @@ impl DatabaseHandler {
 
     pub fn get_rekening_count(&self) -> Result<i64> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
+        let row = conn.query_row(
             "SELECT COUNT(*) FROM V_BEN_REKONREK_SPRINT",
             &[]
         )?;
-        
-        let row = stmt.query_row(&[])?;
         let count: i64 = row.get(0)?;
         Ok(count)
     }
 
     pub fn verify_rekening(&self, norek: &str) -> Result<bool> {
         let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
+        let row = conn.query_row(
             "SELECT COUNT(*) FROM V_BEN_REKONREK_SPRINT WHERE NOREK = :1",
-            &[]
+            &[&norek]
         )?;
-        
-        let row = stmt.query_row(&[&norek])?;
         let count: i64 = row.get(0)?;
         Ok(count > 0)
     }
@@ -176,6 +172,13 @@ impl DatabaseHandler {
 
     pub fn insert_rekening_batch(&self, conn: &r2d2::PooledConnection<OracleConnectionManager>, rekening: &Rekening) -> Result<()> {
         info!("Inserting rekening in batch: {}", rekening.no_rekening);
+        
+        // Add row count check before insert
+        let count_before = conn.query_row(
+            "SELECT COUNT(*) FROM V_BEN_REKONREK_SPRINT",
+            &[]
+        )?;
+        let before_count: i64 = count_before.get(0)?;
         
         match conn.execute(
             "MERGE INTO V_BEN_REKONREK_SPRINT target
@@ -240,11 +243,25 @@ impl DatabaseHandler {
             ],
         ) {
             Ok(rows) => {
-                info!("Affected rows for {}: {:?}", rekening.no_rekening, rows);
+                let count_after = conn.query_row(
+                    "SELECT COUNT(*) FROM V_BEN_REKONREK_SPRINT",
+                    &[]
+                )?;
+                let after_count: i64 = count_after.get(0)?;
+                
+                info!("Row counts - Before: {}, After: {}, Difference: {}", 
+                      before_count, after_count, after_count - before_count);
+                
+                if after_count <= before_count {
+                    warn!("No new rows added for rekening: {} (Before: {}, After: {})", 
+                          rekening.no_rekening, before_count, after_count);
+                }
+                
                 Ok(())
             }
             Err(e) => {
                 error!("Error during batch insert for {}: {:?}", rekening.no_rekening, e);
+                error!("Oracle error: {}", e);
                 Err(e.into())
             }
         }

@@ -5,6 +5,8 @@ use futures::StreamExt;
 use log::{error, info};
 use tokio::time::{sleep, Duration};
 
+const TRANSACTION_BATCH_SIZE: usize = 50;
+
 pub struct BatchProcessor {
     api_client: ApiClient,
     db_handler: DatabaseHandler,
@@ -91,6 +93,7 @@ impl BatchProcessor {
                 let mut success_count = 0;
                 let mut error_count = 0;
                 let mut skipped_count = 0;
+                let mut current_batch = 0;
 
                 info!("Starting transaction for satker {} with {} records", 
                       kd_satker, response.data.len());
@@ -115,6 +118,14 @@ impl BatchProcessor {
                                     return Ok((false, 0));
                                 }
                             }
+
+                            current_batch += 1;
+                            if current_batch >= TRANSACTION_BATCH_SIZE {
+                                info!("Committing intermediate batch of {} records", current_batch);
+                                DatabaseHandler::commit_transaction(&conn)?;
+                                conn.execute("SET TRANSACTION READ WRITE", &[])?;
+                                current_batch = 0;
+                            }
                         },
                         None => {
                             skipped_count += 1;
@@ -124,24 +135,17 @@ impl BatchProcessor {
                     }
                 }
 
+                // Final commit for remaining records
+                if current_batch > 0 {
+                    DatabaseHandler::commit_transaction(&conn)?;
+                }
+
                 info!("Processing summary for satker {} - Success: {}, Errors: {}, Skipped: {}", 
                       kd_satker, success_count, error_count, skipped_count);
 
                 if error_count == 0 && success_count > 0 {
-                    match DatabaseHandler::commit_transaction(&conn) {
-                        Ok(_) => {
-                            info!("Successfully committed {} records for satker {}", 
-                                  success_count, kd_satker);
-                            self.db_handler.update_last_fetch_date(kd_satker)?;
-                            Ok((true, success_count))
-                        },
-                        Err(e) => {
-                            error!("Failed to commit transaction for satker {}: {:?}", 
-                                   kd_satker, e);
-                            let _ = DatabaseHandler::rollback_transaction(&conn);
-                            Ok((false, 0))
-                        }
-                    }
+                    self.db_handler.update_last_fetch_date(kd_satker)?;
+                    Ok((true, success_count))
                 } else {
                     error!("No successful inserts for satker {}", kd_satker);
                     let _ = DatabaseHandler::rollback_transaction(&conn);
